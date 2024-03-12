@@ -2,117 +2,123 @@ import bodyParser from "body-parser";
 import express from "express";
 import { BASE_NODE_PORT } from "../config";
 import { NodeState, Value } from "../types";
-import fetch from 'cross-fetch'; // Using cross-fetch for compatibility
+import fetch from 'cross-fetch';
 
 async function broadcastState(N: number, nodeId: number, nodeState: NodeState): Promise<void> {
-  const promises = [];
-  for (let i = 0; i < N; i++) {
-    if (i !== nodeId) { // Avoid sending message to self
-      const url = `http://localhost:${BASE_NODE_PORT + i}/message`;
-      promises.push(
-        fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ senderId: nodeId, ...nodeState }),
-        })
-      );
+    const promises = [];
+    for (let i = 0; i < N; i++) {
+        if (i !== nodeId) { // Avoid sending message to self
+            const url = `http://localhost:${BASE_NODE_PORT + i}/message`;
+            promises.push(
+                fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ senderId: nodeId, ...nodeState }),
+                })
+            );
+        }
     }
-  }
-  await Promise.all(promises);
+    await Promise.all(promises);
 }
 
 export async function node(
-  nodeId: number,
-  N: number,
-  F: number,
-  initialValue: Value,
-  isFaulty: boolean,
-  nodesAreReady: () => boolean,
-  setNodeIsReady: (index: number) => void
+    nodeId: number,
+    N: number,
+    F: number,
+    initialValue: Value,
+    isFaulty: boolean,
+    nodesAreReady: () => boolean,
+    setNodeIsReady: (index: number) => void
 ) {
-  const app = express();
-  app.use(express.json());
-  app.use(bodyParser.json());
+    const app = express();
+    app.use(express.json());
+    app.use(bodyParser.json());
 
-  // Initialize node state with more cautious handling for k
-  let state: NodeState = {
-    killed: false,
-    x: isFaulty ? null : initialValue,
-    decided: false, // Initially, no decision has been made
-    k: 0, // Ensure k is initialized as 0, avoiding null
-  };
+    // Initialize node state
+    let state: NodeState = {
+        killed: false,
+        x: isFaulty ? null : initialValue,
+        decided: false,
+        k: 0,
+    };
 
-  let votes: { [key: string]: number } = {};
+    let receivedVotes: Record<number, number[]> = {};
 
-  // Define a function to handle the consensus decision-making process
-  const handleDecisionMaking = () => {
-    const voteCount = Object.values(votes).reduce((acc, count) => acc + count, 0);
-    if (voteCount >= (N / 2)) {
-      // Majority is reached; decide on the most common value
-      const majorityValue = Object.keys(votes).reduce((a, b) => votes[a] > votes[b] ? a : b);
-      state.x = majorityValue === '1' ? 1 : 0; // Ensure state.x is set according to majority vote
-      state.decided = true;
-    } else {
-      // No majority; choose randomly between 0 and 1
-      state.x = Math.random() < 0.5 ? 0 : 1;
-    }
+    // Update to handle votes accurately and make decision
+    const processVotesAndDecide = () => {
+        // Check if a majority has been reached in the current round
+        const currentRoundVotes = receivedVotes[state.k] || [];
+        const voteCounts = currentRoundVotes.reduce((acc, vote) => {
+            acc[vote] = (acc[vote] || 0) + 1;
+            return acc;
+        }, {});
 
-    // Reset votes for the next round
-    votes = {};
-    if (!state.decided) {
-      state.k = state.k !== null ? state.k + 1 : 1; // Move to the next round, ensuring k is never null
-      broadcastState(N, nodeId, state).catch(console.error); // Attempt to reach consensus in the next round
-    }
-  };
+        // Determine if there's a majority vote
+        let decidedValue = null;
+        Object.entries(voteCounts).forEach(([vote, count]) => {
+            if (count > N / 2) {
+                decidedValue = parseInt(vote, 10);
+            }
+        });
 
-  // Status route
-  app.get("/status", (req, res) => {
-    res.status(isFaulty ? 500 : 200).send(isFaulty ? "faulty" : "live");
-  });
+        // Decision-making based on majority vote or random choice if undecided
+        if (decidedValue !== null) {
+            state.decided = true;
+            state.x = decidedValue;
+        } else {
+            state.x = Math.random() < 0.5 ? 0 : 1; // Randomly choose between 0 and 1
+            state.k += 1; // Move to the next round
+        }
 
-  // GetState route
-  app.get("/getState", (req, res) => {
-    res.json(state);
-  });
+        // Broadcast state if not decided or continue to next round
+        if (!state.decided) {
+            broadcastState(N, nodeId, state);
+        }
+    };
 
-  // Message route for receiving votes and other communications
-  app.post("/message", (req, res) => {
-    if (!isFaulty) {
-      const { x, k } = req.body;
-      if (k === state.k) { // Ensure the message is for the current round
-        votes[x] = (votes[x] || 0) + 1;
-      }
-      if (Object.keys(votes).length === N - F) { // Once all votes are in, decide
-        handleDecisionMaking();
-      }
-      res.status(200).send("Vote received");
-    } else {
-      res.status(500).send("Node is faulty");
-    }
-  });
+    app.get("/status", (req, res) => {
+        res.status(isFaulty ? 500 : 200).send(isFaulty ? "faulty" : "live");
+    });
 
-  // Start route for initiating the consensus algorithm
-  app.get("/start", async (req, res) => {
-    if (!isFaulty) {
-      await broadcastState(N, nodeId, state).catch(console.error);
-      res.status(200).send("Consensus process started");
-    } else {
-      res.status(500).send("Node is faulty");
-    }
-  });
+    app.get("/getState", (req, res) => {
+        res.json(state);
+    });
 
-  // Stop route for gracefully stopping a node
-  app.get("/stop", (req, res) => {
-    state = { killed: true, x: null, decided: null, k: 0 }; // Ensure k reverts to a default value safely
-    res.status(200).send("Node stopped");
-  });
+    app.post("/message", (req, res) => {
+        if (!isFaulty) {
+            const { senderId, k, x } = req.body;
+            if (k === state.k) {
+                receivedVotes[k] = receivedVotes[k] || [];
+                receivedVotes[k].push(x);
+                if (receivedVotes[k].length >= N - F) {
+                    processVotesAndDecide();
+                }
+            }
+            res.status(200).send("Vote received");
+        } else {
+            res.status(500).send("Node is faulty");
+        }
+    });
 
-  // Start the server
-  const server = app.listen(BASE_NODE_PORT + nodeId, () => {
-    console.log(`Node ${nodeId} is listening on port ${BASE_NODE_PORT + nodeId}`);
-    setNodeIsReady(nodeId);
-  });
+    app.get("/start", async (req, res) => {
+        if (!isFaulty) {
+            await broadcastState(N, nodeId, state);
+            res.status(200).send("Consensus process started");
+        } else {
+            res.status(500).send("Node is faulty");
+        }
+    });
 
-  return server;
+    app.get("/stop", (req, res) => {
+        state = { killed: true, x: null, decided: null, k: 0 };
+        res.status(200).send("Node stopped");
+    });
+
+    const server = app.listen(BASE_NODE_PORT + nodeId, () => {
+        console.log(`Node ${nodeId} is listening on port ${BASE_NODE_PORT + nodeId}`);
+        setNodeIsReady(nodeId);
+    });
+
+    return server;
 }
 
