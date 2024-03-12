@@ -2,7 +2,8 @@ import bodyParser from "body-parser";
 import express from "express";
 import { BASE_NODE_PORT } from "../config";
 import { NodeState, Value } from "../types";
-import fetch from 'node-fetch'; // Confirm this import works or adjust based on your project setup
+import fetch from 'cross-fetch';
+
 
 async function broadcastState(N: number, nodeId: number, nodeState: NodeState): Promise<void> {
   const promises = [];
