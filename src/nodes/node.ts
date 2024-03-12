@@ -42,39 +42,38 @@ export async function node(
         k: 0,
     };
 
-    let receivedVotes: Record<number, number[]> = {};
+  let receivedVotes: Record<number, number[]> = {};
 
-    // Update to handle votes accurately and make decision
-    const processVotesAndDecide = () => {
-        // Check if a majority has been reached in the current round
-        const currentRoundVotes = receivedVotes[state.k] || [];
-        const voteCounts = currentRoundVotes.reduce((acc, vote) => {
-            acc[vote] = (acc[vote] || 0) + 1;
-            return acc;
-        }, {});
+  const processVotesAndDecide = () => {
+    // Assert non-null for state.k
+    const currentRoundVotes = receivedVotes[state.k!] || [];
+    // Specify explicit types for 'acc' and 'vote', and ensure count is treated as a number
+    const voteCounts = currentRoundVotes.reduce((acc: Record<string, number>, vote: number) => {
+      acc[vote] = (acc[vote] || 0) + 1;
+      return acc;
+    }, {});
 
-        // Determine if there's a majority vote
-        let decidedValue = null;
-        Object.entries(voteCounts).forEach(([vote, count]) => {
-            if (count > N / 2) {
-                decidedValue = parseInt(vote, 10);
-            }
-        });
+    let decidedValue: number | null = null;
+    Object.entries(voteCounts).forEach(([vote, count]) => {
+      // Assert count is a number
+      if (count as number > N / 2) {
+        decidedValue = parseInt(vote, 10);
+      }
+    });
 
-        // Decision-making based on majority vote or random choice if undecided
-        if (decidedValue !== null) {
-            state.decided = true;
-            state.x = decidedValue;
-        } else {
-            state.x = Math.random() < 0.5 ? 0 : 1; // Randomly choose between 0 and 1
-            state.k += 1; // Move to the next round
-        }
+    if (decidedValue !== null) {
+      state.decided = true;
+      state.x = decidedValue;
+    } else {
+      state.x = Math.random() < 0.5 ? 0 : 1;
+      // Assert non-null for state.k
+      state.k = state.k! + 1;
+    }
 
-        // Broadcast state if not decided or continue to next round
-        if (!state.decided) {
-            broadcastState(N, nodeId, state);
-        }
-    };
+    if (!state.decided) {
+      broadcastState(N, nodeId, state).catch(console.error);
+    }
+  };
 
     app.get("/status", (req, res) => {
         res.status(isFaulty ? 500 : 200).send(isFaulty ? "faulty" : "live");
