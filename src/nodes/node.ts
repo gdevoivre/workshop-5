@@ -1,50 +1,104 @@
 import bodyParser from "body-parser";
 import express from "express";
 import { BASE_NODE_PORT } from "../config";
-import { Value } from "../types";
+import { NodeState, Value } from "../types";
+import fetch from 'node-fetch'; // Ensure fetch is appropriately imported or required
+
+async function broadcastState(N, nodeId, NodeState) {
+  const promises = [];
+  for (let i = 0; i < N; i++) {
+    if (i !== nodeId) { // Avoid sending message to self
+      const url = `http://localhost:${BASE_NODE_PORT + i}/message`;
+      promises.push(
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ senderId: nodeId, ...NodeState }),
+        })
+      );
+    }
+  }
+  await Promise.all(promises);
+}
 
 export async function node(
-  nodeId: number, // the ID of the node
-  N: number, // total number of nodes in the network
-  F: number, // number of faulty nodes in the network
-  initialValue: Value, // initial value of the node
-  isFaulty: boolean, // true if the node is faulty, false otherwise
-  nodesAreReady: () => boolean, // used to know if all nodes are ready to receive requests
-  setNodeIsReady: (index: number) => void // this should be called when the node is started and ready to receive requests
+  nodeId: number,
+  N: number,
+  F: number,
+  initialValue: Value,
+  isFaulty: boolean,
+  nodesAreReady: () => boolean,
+  setNodeIsReady: (index: number) => void
 ) {
-  const node = express();
-  node.use(express.json());
-  node.use(bodyParser.json());
+  const app = express();
+  app.use(express.json());
+  app.use(bodyParser.json());
 
-  // TODO implement this
-  // this route allows retrieving the current status of the node
-  // node.get("/status", (req, res) => {});
+  // Initialize node state
+  let state: NodeState = {
+    killed: false,
+    x: isFaulty ? null : initialValue,
+    decided: null,
+    k: null,
+  };
 
-  // TODO implement this
-  // this route allows the node to receive messages from other nodes
-  // node.post("/message", (req, res) => {});
+  // Status route
+  app.get("/status", (req, res) => {
+    if (isFaulty) {
+      res.status(500).send("faulty");
+    } else {
+      res.status(200).send("live");
+    }
+  });
 
-  // TODO implement this
-  // this route is used to start the consensus algorithm
-  // node.get("/start", async (req, res) => {});
+  // GetState route
+  app.get("/getState", (req, res) => {
+    res.json(state);
+  });
 
-  // TODO implement this
-  // this route is used to stop the consensus algorithm
-  // node.get("/stop", async (req, res) => {});
+  // Message route for receiving votes and other communications
+  let votes = { '0': 0, '1': 0 }; // Initialize vote counting
 
-  // TODO implement this
-  // get the current state of a node
-  // node.get("/getState", (req, res) => {});
+  app.post("/message", (req, res) => {
+    if (!isFaulty) {
+      const { x } = req.body;
+      votes[x] += 1;
+      // Process votes here and adjust state as necessary
+      res.status(200).send("Vote received");
+    } else {
+      res.status(500).send("Node is faulty");
+    }
+  });
 
-  // start the server
-  const server = node.listen(BASE_NODE_PORT + nodeId, async () => {
-    console.log(
-      `Node ${nodeId} is listening on port ${BASE_NODE_PORT + nodeId}`
-    );
+  // Start route for initiating the consensus algorithm
+  app.get("/start", async (req, res) => {
+    if (!isFaulty) {
+      state.k = 0;
+      await broadcastState(N, nodeId, state);
+      res.status(200).send("Consensus process started");
+    } else {
+      res.status(500).send("Node is faulty");
+    }
+  });
 
-    // the node is ready
+  // Stop route for gracefully stopping a node
+  app.get("/stop", (req, res) => {
+    state = {
+      ...state,
+      killed: true,
+      x: null,
+      decided: null,
+      k: null,
+    };
+    res.status(200).send("Node stopped");
+  });
+
+  // Start the server
+  const server = app.listen(BASE_NODE_PORT + nodeId, () => {
+    console.log(`Node ${nodeId} is listening on port ${BASE_NODE_PORT + nodeId}`);
     setNodeIsReady(nodeId);
   });
 
   return server;
 }
+
