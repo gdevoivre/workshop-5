@@ -4,17 +4,18 @@ import { BASE_NODE_PORT } from "../config";
 import { NodeState, Value } from "../types";
 import fetch from 'node-fetch'; // Confirm this import works or adjust based on your project setup
 
-// Correct the function parameters' types
 async function broadcastState(N: number, nodeId: number, nodeState: NodeState): Promise<void> {
   const promises = [];
   for (let i = 0; i < N; i++) {
-    if (i !== nodeId) { // Avoid sending message to self
+    if (i !== nodeId) {
       const url = `http://localhost:${BASE_NODE_PORT + i}/message`;
       promises.push(
-        fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ senderId: nodeId, ...nodeState }),
+        import('node-fetch').then(({default: fetch}) => {
+          return fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ senderId: nodeId, ...nodeState }),
+          });
         })
       );
     }
