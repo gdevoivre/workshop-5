@@ -2,9 +2,10 @@ import bodyParser from "body-parser";
 import express from "express";
 import { BASE_NODE_PORT } from "../config";
 import { NodeState, Value } from "../types";
-import fetch from 'node-fetch'; // Ensure fetch is appropriately imported or required
+import fetch from 'node-fetch'; // Confirm this import works or adjust based on your project setup
 
-async function broadcastState(N, nodeId, NodeState) {
+// Correct the function parameters' types
+async function broadcastState(N: number, nodeId: number, nodeState: NodeState): Promise<void> {
   const promises = [];
   for (let i = 0; i < N; i++) {
     if (i !== nodeId) { // Avoid sending message to self
@@ -13,7 +14,7 @@ async function broadcastState(N, nodeId, NodeState) {
         fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ senderId: nodeId, ...NodeState }),
+          body: JSON.stringify({ senderId: nodeId, ...nodeState }),
         })
       );
     }
@@ -57,12 +58,14 @@ export async function node(
   });
 
   // Message route for receiving votes and other communications
-  let votes = { '0': 0, '1': 0 }; // Initialize vote counting
+  let votes: { [key: string]: number } = { '0': 0, '1': 0 }; // Correctly type the votes object
 
   app.post("/message", (req, res) => {
     if (!isFaulty) {
       const { x } = req.body;
-      votes[x] += 1;
+      if (typeof x === 'string' && votes.hasOwnProperty(x)) {
+        votes[x] += 1;
+      }
       // Process votes here and adjust state as necessary
       res.status(200).send("Vote received");
     } else {
@@ -101,4 +104,3 @@ export async function node(
 
   return server;
 }
-
