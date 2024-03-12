@@ -9,11 +9,13 @@ async function broadcastState(N: number, nodeId: number, nodeState: NodeState): 
   for (let i = 0; i < N; i++) {
     if (i !== nodeId) { // Avoid sending message to self
       const url = `http://localhost:${BASE_NODE_PORT + i}/message`;
-      promises.push(fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ senderId: nodeId, ...nodeState }),
-      }));
+      promises.push(
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ senderId: nodeId, ...nodeState }),
+        })
+      );
     }
   }
   await Promise.all(promises);
@@ -32,12 +34,12 @@ export async function node(
   app.use(express.json());
   app.use(bodyParser.json());
 
-  // Initialize node state
+  // Initialize node state with more cautious handling for k
   let state: NodeState = {
     killed: false,
     x: isFaulty ? null : initialValue,
     decided: false, // Initially, no decision has been made
-    k: 0, // Starting at round 0
+    k: 0, // Ensure k is initialized as 0, avoiding null
   };
 
   let votes: { [key: string]: number } = {};
@@ -45,7 +47,7 @@ export async function node(
   // Define a function to handle the consensus decision-making process
   const handleDecisionMaking = () => {
     const voteCount = Object.values(votes).reduce((acc, count) => acc + count, 0);
-    if (voteCount > (N / 2)) {
+    if (voteCount >= (N / 2)) {
       // Majority is reached; decide on the most common value
       const majorityValue = Object.keys(votes).reduce((a, b) => votes[a] > votes[b] ? a : b);
       state.x = majorityValue === '1' ? 1 : 0; // Ensure state.x is set according to majority vote
@@ -58,7 +60,7 @@ export async function node(
     // Reset votes for the next round
     votes = {};
     if (!state.decided) {
-      state.k += 1; // Move to the next round
+      state.k = state.k !== null ? state.k + 1 : 1; // Move to the next round, ensuring k is never null
       broadcastState(N, nodeId, state).catch(console.error); // Attempt to reach consensus in the next round
     }
   };
@@ -101,7 +103,7 @@ export async function node(
 
   // Stop route for gracefully stopping a node
   app.get("/stop", (req, res) => {
-    state = { killed: true, x: null, decided: null, k: null };
+    state = { killed: true, x: null, decided: null, k: 0 }; // Ensure k reverts to a default value safely
     res.status(200).send("Node stopped");
   });
 
