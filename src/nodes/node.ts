@@ -2,23 +2,18 @@ import bodyParser from "body-parser";
 import express from "express";
 import { BASE_NODE_PORT } from "../config";
 import { NodeState, Value } from "../types";
-import fetch from 'cross-fetch';
-
+import fetch from 'cross-fetch'; // Using cross-fetch for compatibility
 
 async function broadcastState(N: number, nodeId: number, nodeState: NodeState): Promise<void> {
   const promises = [];
   for (let i = 0; i < N; i++) {
-    if (i !== nodeId) {
+    if (i !== nodeId) { // Avoid sending message to self
       const url = `http://localhost:${BASE_NODE_PORT + i}/message`;
-      promises.push(
-        import('node-fetch').then(({default: fetch}) => {
-          return fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ senderId: nodeId, ...nodeState }),
-          });
-        })
-      );
+      promises.push(fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ senderId: nodeId, ...nodeState }),
+      }));
     }
   }
   await Promise.all(promises);
@@ -41,17 +36,36 @@ export async function node(
   let state: NodeState = {
     killed: false,
     x: isFaulty ? null : initialValue,
-    decided: null,
-    k: null,
+    decided: false, // Initially, no decision has been made
+    k: 0, // Starting at round 0
+  };
+
+  let votes: { [key: string]: number } = {};
+
+  // Define a function to handle the consensus decision-making process
+  const handleDecisionMaking = () => {
+    const voteCount = Object.values(votes).reduce((acc, count) => acc + count, 0);
+    if (voteCount > (N / 2)) {
+      // Majority is reached; decide on the most common value
+      const majorityValue = Object.keys(votes).reduce((a, b) => votes[a] > votes[b] ? a : b);
+      state.x = majorityValue === '1' ? 1 : 0; // Ensure state.x is set according to majority vote
+      state.decided = true;
+    } else {
+      // No majority; choose randomly between 0 and 1
+      state.x = Math.random() < 0.5 ? 0 : 1;
+    }
+
+    // Reset votes for the next round
+    votes = {};
+    if (!state.decided) {
+      state.k += 1; // Move to the next round
+      broadcastState(N, nodeId, state).catch(console.error); // Attempt to reach consensus in the next round
+    }
   };
 
   // Status route
   app.get("/status", (req, res) => {
-    if (isFaulty) {
-      res.status(500).send("faulty");
-    } else {
-      res.status(200).send("live");
-    }
+    res.status(isFaulty ? 500 : 200).send(isFaulty ? "faulty" : "live");
   });
 
   // GetState route
@@ -60,15 +74,15 @@ export async function node(
   });
 
   // Message route for receiving votes and other communications
-  let votes: { [key: string]: number } = { '0': 0, '1': 0 }; // Correctly type the votes object
-
   app.post("/message", (req, res) => {
     if (!isFaulty) {
-      const { x } = req.body;
-      if (typeof x === 'string' && votes.hasOwnProperty(x)) {
-        votes[x] += 1;
+      const { x, k } = req.body;
+      if (k === state.k) { // Ensure the message is for the current round
+        votes[x] = (votes[x] || 0) + 1;
       }
-      // Process votes here and adjust state as necessary
+      if (Object.keys(votes).length === N - F) { // Once all votes are in, decide
+        handleDecisionMaking();
+      }
       res.status(200).send("Vote received");
     } else {
       res.status(500).send("Node is faulty");
@@ -78,8 +92,7 @@ export async function node(
   // Start route for initiating the consensus algorithm
   app.get("/start", async (req, res) => {
     if (!isFaulty) {
-      state.k = 0;
-      await broadcastState(N, nodeId, state);
+      await broadcastState(N, nodeId, state).catch(console.error);
       res.status(200).send("Consensus process started");
     } else {
       res.status(500).send("Node is faulty");
@@ -88,13 +101,7 @@ export async function node(
 
   // Stop route for gracefully stopping a node
   app.get("/stop", (req, res) => {
-    state = {
-      ...state,
-      killed: true,
-      x: null,
-      decided: null,
-      k: null,
-    };
+    state = { killed: true, x: null, decided: null, k: null };
     res.status(200).send("Node stopped");
   });
 
@@ -106,3 +113,4 @@ export async function node(
 
   return server;
 }
+
