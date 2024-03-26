@@ -7,7 +7,7 @@ import fetch from 'cross-fetch';
 async function broadcastState(N: number, nodeId: number, nodeState: NodeState): Promise<void> {
     const promises = [];
     for (let i = 0; i < N; i++) {
-        if (i !== nodeId) { // Avoid sending message to self
+        if (i !== nodeId) {
             const url = `http://localhost:${BASE_NODE_PORT + i}/message`;
             promises.push(
                 fetch(url, {
